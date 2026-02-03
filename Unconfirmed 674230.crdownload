@@ -1,0 +1,503 @@
+document.addEventListener('DOMContentLoaded', function() {
+    // 获取DOM元素
+    const calculateBtn = document.getElementById('calculate-btn');
+    const boxLengthInput = document.getElementById('box-length');
+    const boxWidthInput = document.getElementById('box-width');
+    const boxHeightInput = document.getElementById('box-height');
+    const palletLengthInput = document.getElementById('pallet-length');
+    const palletWidthInput = document.getElementById('pallet-width');
+    const maxHeightInput = document.getElementById('max-height');
+    const allowRotationCheckbox = document.getElementById('allow-rotation');
+    const allowOverhangCheckbox = document.getElementById('allow-overhang');
+    
+    const resultsDiv = document.getElementById('results');
+    const noResultsDiv = document.getElementById('no-results');
+    
+    // 结果展示元素
+    const boxesPerLayerSpan = document.getElementById('boxes-per-layer');
+    const layersSpan = document.getElementById('layers');
+    const totalBoxesSpan = document.getElementById('total-boxes');
+    const utilizationSpan = document.getElementById('utilization');
+    const stackingDirectionSpan = document.getElementById('stacking-direction');
+    const totalHeightSpan = document.getElementById('total-height');
+    const usedAreaSpan = document.getElementById('used-area');
+    const totalVolumeSpan = document.getElementById('total-volume');
+    const availableVolumeSpan = document.getElementById('available-volume');
+    
+    // 视图切换
+    const viewTopBtn = document.getElementById('view-top');
+    const viewSideBtn = document.getElementById('view-side');
+    const view3DBtn = document.getElementById('view-3d');
+    const diagramViews = document.querySelectorAll('.diagram-view');
+    
+    // 示例按钮
+    const exampleBtns = document.querySelectorAll('.example-btn');
+    
+    // 计算最优堆叠方案
+    function calculateOptimalStacking() {
+        // 获取输入值
+        const boxLength = parseInt(boxLengthInput.value);
+        const boxWidth = parseInt(boxWidthInput.value);
+        const boxHeight = parseInt(boxHeightInput.value);
+        const palletLength = parseInt(palletLengthInput.value);
+        const palletWidth = parseInt(palletWidthInput.value);
+        const maxHeight = parseInt(maxHeightInput.value);
+        const allowRotation = allowRotationCheckbox.checked;
+        const allowOverhang = !allowOverhangCheckbox.checked; // 注意：复选框是"不允许超出"
+        
+        // 验证输入
+        if ([boxLength, boxWidth, boxHeight, palletLength, palletWidth, maxHeight].some(v => isNaN(v) || v <= 0)) {
+            alert('请输入有效的正数尺寸！');
+            return;
+        }
+        
+        // 计算可能的堆叠方案
+        const schemes = [];
+        
+        // 方案1：纸箱按原始方向放置（不旋转）
+        schemes.push(calculateScheme(
+            boxLength, boxWidth, boxHeight,
+            palletLength, palletWidth, maxHeight,
+            '原始方向'
+        ));
+        
+        // 方案2：纸箱旋转90度放置（如果允许旋转）
+        if (allowRotation) {
+            schemes.push(calculateScheme(
+                boxWidth, boxLength, boxHeight, // 旋转90度，交换长宽
+                palletLength, palletWidth, maxHeight,
+                '旋转90°'
+            ));
+            
+            // 方案3：混合方向（一部分旋转，一部分不旋转）
+            schemes.push(calculateMixedScheme(
+                boxLength, boxWidth, boxHeight,
+                palletLength, palletWidth, maxHeight
+            ));
+        }
+        
+        // 找出最优方案（最多纸箱数量）
+        const optimalScheme = schemes.reduce((best, current) => {
+            return current.totalBoxes > best.totalBoxes ? current : best;
+        });
+        
+        // 显示结果
+        displayResults(optimalScheme);
+        
+        // 绘制示意图
+        drawDiagram(optimalScheme);
+        
+        // 显示优化建议
+        displayOptimizationTips(optimalScheme, schemes);
+    }
+    
+    // 计算单个方案
+    function calculateScheme(boxL, boxW, boxH, palletL, palletW, maxH, direction) {
+        // 每层可以放置的数量（整数除法）
+        const boxesPerRow = Math.floor(palletL / boxL);
+        const rowsPerLayer = Math.floor(palletW / boxW);
+        const boxesPerLayer = boxesPerRow * rowsPerLayer;
+        
+        // 堆叠层数
+        const layers = Math.floor(maxH / boxH);
+        
+        // 总纸箱数量
+        const totalBoxes = boxesPerLayer * layers;
+        
+        // 计算空间利用率
+        const boxVolume = boxL * boxW * boxH;
+        const totalBoxVolume = totalBoxes * boxVolume;
+        const availableVolume = palletL * palletW * maxH;
+        const utilization = (totalBoxVolume / availableVolume) * 100;
+        
+        // 计算占用面积
+        const usedArea = boxesPerLayer * (boxL * boxW);
+        const totalArea = palletL * palletW;
+        const areaUtilization = (usedArea / totalArea) * 100;
+        
+        return {
+            boxL, boxW, boxH,
+            palletL, palletW, maxH,
+            direction,
+            boxesPerRow,
+            rowsPerLayer,
+            boxesPerLayer,
+            layers,
+            totalBoxes,
+            utilization,
+            totalBoxVolume,
+            availableVolume,
+            usedArea,
+            areaUtilization,
+            totalHeight: layers * boxH,
+            layoutType: 'uniform'
+        };
+    }
+    
+    // 计算混合方向方案
+    function calculateMixedScheme(boxL, boxW, boxH, palletL, palletW, maxH) {
+        // 尝试不同组合找到最优混合
+        let bestScheme = null;
+        let maxBoxes = 0;
+        
+        // 尝试不同的混合比例
+        for (let numLongDirection = 0; numLongDirection <= Math.floor(palletL / boxL); numLongDirection++) {
+            // 长方向放置的数量
+            const longDirectionWidth = numLongDirection * boxL;
+            const remainingWidth = palletL - longDirectionWidth;
+            
+            // 剩余的宽度可以放置多少旋转后的纸箱
+            const numRotated = Math.floor(remainingWidth / boxW);
+            
+            // 检查宽度方向是否可以容纳
+            if (boxW <= palletW && boxL <= palletW) {
+                const boxesPerLayer = numLongDirection * Math.floor(palletW / boxW) + 
+                                    numRotated * Math.floor(palletW / boxL);
+                
+                const layers = Math.floor(maxH / boxH);
+                const totalBoxes = boxesPerLayer * layers;
+                
+                if (totalBoxes > maxBoxes) {
+                    maxBoxes = totalBoxes;
+                    
+                    // 计算空间利用率
+                    const boxVolume = boxL * boxW * boxH;
+                    const totalBoxVolume = totalBoxes * boxVolume;
+                    const availableVolume = palletL * palletW * maxH;
+                    const utilization = (totalBoxVolume / availableVolume) * 100;
+                    
+                    bestScheme = {
+                        boxL, boxW, boxH,
+                        palletL, palletW, maxH,
+                        direction: '混合方向',
+                        boxesPerLayer,
+                        layers,
+                        totalBoxes,
+                        utilization,
+                        totalBoxVolume,
+                        availableVolume,
+                        totalHeight: layers * boxH,
+                        layoutType: 'mixed',
+                        numLongDirection,
+                        numRotated,
+                        rowsLong: Math.floor(palletW / boxW),
+                        rowsRotated: Math.floor(palletW / boxL)
+                    };
+                }
+            }
+        }
+        
+        return bestScheme || calculateScheme(boxL, boxW, boxH, palletL, palletW, maxH, '混合方向（无优化）');
+    }
+    
+    // 显示计算结果
+    function displayResults(scheme) {
+        // 显示结果区域
+        resultsDiv.classList.remove('hidden');
+        noResultsDiv.classList.add('hidden');
+        
+        // 更新结果数值
+        boxesPerLayerSpan.textContent = scheme.boxesPerLayer;
+        layersSpan.textContent = scheme.layers;
+        totalBoxesSpan.textContent = scheme.totalBoxes;
+        utilizationSpan.textContent = `${scheme.utilization.toFixed(2)}%`;
+        stackingDirectionSpan.textContent = scheme.direction;
+        totalHeightSpan.textContent = `${scheme.totalHeight} mm`;
+        usedAreaSpan.textContent = `${scheme.usedArea ? scheme.usedArea.toLocaleString() : 'N/A'} mm²`;
+        totalVolumeSpan.textContent = `${(scheme.totalBoxVolume / 1e9).toFixed(3)} m³`;
+        availableVolumeSpan.textContent = `${(scheme.availableVolume / 1e9).toFixed(3)} m³`;
+        
+        // 根据利用率设置颜色
+        if (scheme.utilization >= 80) {
+            utilizationSpan.style.color = '#27ae60';
+        } else if (scheme.utilization >= 60) {
+            utilizationSpan.style.color = '#f39c12';
+        } else {
+            utilizationSpan.style.color = '#e74c3c';
+        }
+    }
+    
+    // 绘制示意图
+    function drawDiagram(scheme) {
+        // 获取俯视图容器
+        const topView = document.getElementById('top-view');
+        topView.innerHTML = '';
+        
+        // 创建卡板轮廓
+        const palletOutline = document.createElement('div');
+        palletOutline.className = 'pallet-outline';
+        palletOutline.innerHTML = `<div class="pallet-label">卡板 (${scheme.palletL}×${scheme.palletW} mm)</div>`;
+        
+        // 设置卡板轮廓尺寸（按比例缩放）
+        const containerWidth = topView.offsetWidth;
+        const containerHeight = topView.offsetHeight;
+        
+        const scale = Math.min(
+            containerWidth * 0.8 / scheme.palletL,
+            containerHeight * 0.7 / scheme.palletW
+        );
+        
+        const palletWidth = scheme.palletL * scale;
+        const palletHeight = scheme.palletW * scale;
+        
+        palletOutline.style.width = `${palletWidth}px`;
+        palletOutline.style.height = `${palletHeight}px`;
+        palletOutline.style.top = `${(containerHeight - palletHeight) / 2}px`;
+        palletOutline.style.left = `${(containerWidth - palletWidth) / 2}px`;
+        
+        topView.appendChild(palletOutline);
+        
+        // 根据布局类型绘制纸箱
+        if (scheme.layoutType === 'uniform') {
+            drawUniformLayout(scheme, palletOutline, scale);
+        } else if (scheme.layoutType === 'mixed') {
+            drawMixedLayout(scheme, palletOutline, scale);
+        }
+        
+        // 绘制侧视图
+        drawSideView(scheme);
+    }
+    
+    // 绘制统一方向布局
+    function drawUniformLayout(scheme, palletOutline, scale) {
+        const boxWidth = scheme.boxL * scale;
+        const boxHeight = scheme.boxW * scale;
+        
+        for (let row = 0; row < scheme.rowsPerLayer; row++) {
+            for (let col = 0; col < scheme.boxesPerRow; col++) {
+                const box = document.createElement('div');
+                box.className = 'box long';
+                box.style.width = `${boxWidth}px`;
+                box.style.height = `${boxHeight}px`;
+                box.style.left = `${col * boxWidth}px`;
+                box.style.top = `${row * boxHeight}px`;
+                box.textContent = `${scheme.boxL}×${scheme.boxW}`;
+                box.title = `纸箱: ${scheme.boxL}×${scheme.boxW} mm`;
+                
+                palletOutline.appendChild(box);
+            }
+        }
+    }
+    
+    // 绘制混合方向布局
+    function drawMixedLayout(scheme, palletOutline, scale) {
+        const longBoxWidth = scheme.boxL * scale;
+        const longBoxHeight = scheme.boxW * scale;
+        const rotatedBoxWidth = scheme.boxW * scale;
+        const rotatedBoxHeight = scheme.boxL * scale;
+        
+        // 绘制长方向的纸箱
+        for (let row = 0; row < scheme.rowsLong; row++) {
+            for (let col = 0; col < scheme.numLongDirection; col++) {
+                const box = document.createElement('div');
+                box.className = 'box long';
+                box.style.width = `${longBoxWidth}px`;
+                box.style.height = `${longBoxHeight}px`;
+                box.style.left = `${col * longBoxWidth}px`;
+                box.style.top = `${row * longBoxHeight}px`;
+                box.textContent = `${scheme.boxL}×${scheme.boxW}`;
+                
+                palletOutline.appendChild(box);
+            }
+        }
+        
+        // 绘制旋转后的纸箱
+        const rotatedStartX = scheme.numLongDirection * longBoxWidth;
+        
+        for (let row = 0; row < scheme.rowsRotated; row++) {
+            for (let col = 0; col < scheme.numRotated; col++) {
+                const box = document.createElement('div');
+                box.className = 'box wide';
+                box.style.width = `${rotatedBoxWidth}px`;
+                box.style.height = `${rotatedBoxHeight}px`;
+                box.style.left = `${rotatedStartX + col * rotatedBoxWidth}px`;
+                box.style.top = `${row * rotatedBoxHeight}px`;
+                box.textContent = `${scheme.boxW}×${scheme.boxL}`;
+                
+                palletOutline.appendChild(box);
+            }
+        }
+    }
+    
+    // 绘制侧视图
+    function drawSideView(scheme) {
+        const sideView = document.getElementById('side-view');
+        sideView.innerHTML = '';
+        
+        const container = document.createElement('div');
+        container.className = 'side-view-container';
+        
+        // 创建卡板底座
+        const palletBase = document.createElement('div');
+        palletBase.className = 'pallet-base';
+        palletBase.innerHTML = '<div class="pallet-label">卡板</div>';
+        palletBase.style.width = '60%';
+        palletBase.style.height = '20px';
+        palletBase.style.bottom = '0';
+        palletBase.style.left = '50%';
+        palletBase.style.transform = 'translateX(-50%)';
+        
+        container.appendChild(palletBase);
+        
+        // 绘制堆叠层
+        const layerHeight = 30; // 每层高度（像素）
+        const layerWidth = 70; // 每层宽度（百分比）
+        
+        for (let i = 0; i < scheme.layers; i++) {
+            const layer = document.createElement('div');
+            layer.className = 'layer';
+            layer.style.width = `${layerWidth}%`;
+            layer.style.height = `${layerHeight}px`;
+            layer.style.bottom = `${20 + i * layerHeight}px`;
+            layer.style.left = '50%';
+            layer.style.transform = 'translateX(-50%)';
+            layer.style.backgroundColor = `rgba(74, 144, 226, ${0.7 - i * 0.05})`;
+            layer.title = `第${i + 1}层，高度: ${scheme.boxH}mm`;
+            
+            container.appendChild(layer);
+        }
+        
+        // 添加高度标签
+        const heightLabel = document.createElement('div');
+        heightLabel.style.position = 'absolute';
+        heightLabel.style.right = '10px';
+        heightLabel.style.top = '10px';
+        heightLabel.style.background = 'white';
+        heightLabel.style.padding = '5px 10px';
+        heightLabel.style.borderRadius = '5px';
+        heightLabel.style.boxShadow = '0 2px 5px rgba(0,0,0,0.1)';
+        heightLabel.innerHTML = `<strong>总高度:</strong> ${scheme.totalHeight}mm<br>
+                                <strong>层数:</strong> ${scheme.layers}`;
+        
+        container.appendChild(heightLabel);
+        sideView.appendChild(container);
+    }
+    
+    // 显示优化建议
+    function displayOptimizationTips(optimalScheme, allSchemes) {
+        const tipsContent = document.getElementById('tips-content');
+        tipsContent.innerHTML = '';
+        
+        // 利用率评估
+        const utilizationTip = document.createElement('div');
+        utilizationTip.className = 'tip';
+        
+        if (optimalScheme.utilization >= 85) {
+            utilizationTip.innerHTML = '<strong>✓ 优秀利用率</strong>: 当前方案的空间利用率非常理想，超过85%。';
+        } else if (optimalScheme.utilization >= 70) {
+            utilizationTip.innerHTML = '<strong>✓ 良好利用率</strong>: 当前方案的空间利用率良好，可以考虑进一步优化。';
+        } else if (optimalScheme.utilization >= 50) {
+            utilizationTip.innerHTML = '<strong>⚠ 中等利用率</strong>: 当前方案的空间利用率一般，建议尝试以下优化：<br>' +
+                                      '1. 考虑允许纸箱旋转<br>' +
+                                      '2. 调整纸箱摆放方向<br>' +
+                                      '3. 检查是否有更好的混合方案';
+            utilizationTip.classList.add('warning');
+        } else {
+            utilizationTip.innerHTML = '<strong>⚠ 低利用率</strong>: 当前方案的空间利用率较低，建议：<br>' +
+                                      '1. 考虑使用不同尺寸的纸箱<br>' +
+                                      '2. 检查卡板尺寸是否合适<br>' +
+                                      '3. 考虑允许纸箱部分超出（如果安全允许）';
+            utilizationTip.classList.add('warning');
+        }
+        
+        tipsContent.appendChild(utilizationTip);
+        
+        // 堆叠高度建议
+        const heightTip = document.createElement('div');
+        heightTip.className = 'tip info';
+        
+        const heightUtilization = (optimalScheme.totalHeight / optimalScheme.maxH) * 100;
+        if (heightUtilization >= 95) {
+            heightTip.innerHTML = '<strong>✓ 高度充分利用</strong>: 堆叠高度已接近最大限制，充分利用了垂直空间。';
+        } else if (heightUtilization >= 80) {
+            heightTip.innerHTML = `<strong>✓ 高度利用良好</strong>: 堆叠高度利用了${heightUtilization.toFixed(1)}%的可用高度。`;
+        } else {
+            heightTip.innerHTML = `<strong>⚠ 高度利用不足</strong>: 堆叠高度仅利用了${heightUtilization.toFixed(1)}%的可用高度，可以考虑：<br>
+                                  1. 使用更薄的纸箱<br>
+                                  2. 增加堆叠层数（如果承重允许）`;
+            heightTip.classList.add('warning');
+        }
+        
+        tipsContent.appendChild(heightTip);
+        
+        // 比较其他方案
+        if (allSchemes.length > 1) {
+            const compareTip = document.createElement('div');
+            compareTip.className = 'tip info';
+            
+            let compareText = '<strong>方案比较:</strong><br>';
+            allSchemes.forEach((scheme, index) => {
+                compareText += `${scheme.direction}: ${scheme.totalBoxes}个纸箱，利用率${scheme.utilization.toFixed(2)}%<br>`;
+            });
+            
+            compareTip.innerHTML = compareText;
+            tipsContent.appendChild(compareTip);
+        }
+        
+        // 一般建议
+        const generalTip = document.createElement('div');
+        generalTip.className = 'tip';
+        generalTip.innerHTML = '<strong>一般建议:</strong><br>' +
+                              '1. 实际堆叠时需考虑纸箱承重能力<br>' +
+                              '2. 最底层纸箱需均匀分布以分散重量<br>' +
+                              '3. 考虑使用缠绕膜固定堆叠<br>' +
+                              '4. 定期检查堆叠稳定性';
+        
+        tipsContent.appendChild(generalTip);
+    }
+    
+    // 视图切换功能
+    function switchView(viewName) {
+        // 更新按钮状态
+        document.querySelectorAll('.diagram-controls button').forEach(btn => {
+            btn.classList.remove('active');
+        });
+        
+        if (viewName === 'top') {
+            viewTopBtn.classList.add('active');
+        } else if (viewName === 'side') {
+            viewSideBtn.classList.add('active');
+        } else if (viewName === '3d') {
+            view3DBtn.classList.add('active');
+        }
+        
+        // 显示对应视图
+        diagramViews.forEach(view => {
+            view.classList.remove('active');
+        });
+        
+        document.getElementById(`${viewName}-view`).classList.add('active');
+    }
+    
+    // 示例按钮功能
+    exampleBtns.forEach(btn => {
+        btn.addEventListener('click', function() {
+            const length = this.getAttribute('data-length');
+            const width = this.getAttribute('data-width');
+            const height = this.getAttribute('data-height');
+            
+            boxLengthInput.value = length;
+            boxWidthInput.value = width;
+            boxHeightInput.value = height;
+            
+            // 自动计算
+            calculateOptimalStacking();
+        });
+    });
+    
+    // 事件监听
+    calculateBtn.addEventListener('click', calculateOptimalStacking);
+    
+    viewTopBtn.addEventListener('click', () => switchView('top'));
+    viewSideBtn.addEventListener('click', () => switchView('side'));
+    view3DBtn.addEventListener('click', () => switchView('view-3d'));
+    
+    // 输入框变化时重新计算
+    [boxLengthInput, boxWidthInput, boxHeightInput, 
+     palletLengthInput, palletWidthInput, maxHeightInput].forEach(input => {
+        input.addEventListener('change', calculateOptimalStacking);
+    });
+    
+    // 页面加载时计算示例
+    calculateOptimalStacking();
+});
